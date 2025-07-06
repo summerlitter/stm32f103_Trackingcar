@@ -1,0 +1,107 @@
+#include "pwm.h"
+#include "bluetooth.h"
+#include "infrarad.h"
+#include "ultrasonic.h"
+#include "time.h"
+#include "uart.h"
+#include <string.h>
+
+// 状态机定义
+typedef enum {
+    STATE_INIT,         // 初始化状态
+    STATE_MANUAL,       // 手操模式
+    STATE_TRACKING      // 循迹模式
+} SystemState;
+
+// 全局变量
+static SystemState current_state = STATE_INIT;
+static char bt_cmd[20] = {0};  // 蓝牙指令缓冲区
+
+/**************** 初始化函数 ****************/
+void system_init(void) {
+    // 基础模块初始化
+    time_init();            // 必须最先初始化
+    ultrasonic_init();      // 超声波传感器
+    infrarad_init();        // 红外传感器
+    pwm_motor_init();       // 电机驱动
+    USART2_Init();          // 蓝牙模块
+    
+    // 设置电机初始方向
+    set_left_direction(1);
+    set_right_direction(1);
+}
+
+/**************** 状态处理函数 ****************/
+void handle_manual_mode(void) {
+    static uint8_t cmd_index = 0;
+    char ch = USART2_RecvChar();
+    
+    if(ch == '\n' || cmd_index >= sizeof(bt_cmd)-1) {
+        bt_cmd[cmd_index] = '\0';
+        cmd_index = 0;
+        
+        // 指令解析
+        if(strcmp(bt_cmd, "exchange") == 0) {
+            current_state = STATE_TRACKING;
+            USART2_SendChar('M'); // 发送模式切换确认
+        }
+        else if(strcmp(bt_cmd, "go") == 0) {
+            set_left_pwm(800);
+            set_right_pwm(800);
+        }
+        else if(strcmp(bt_cmd, "back") == 0) {
+            set_left_pwm(500);
+            set_right_pwm(500);
+        }
+        else if(strcmp(bt_cmd, "left") == 0) {
+            set_left_pwm(300);
+            set_right_pwm(800);
+        }
+        else if(strcmp(bt_cmd, "right") == 0) {
+            set_left_pwm(800);
+            set_right_pwm(300);
+        }
+        
+        memset(bt_cmd, 0, sizeof(bt_cmd));
+    }
+    else if(ch != '\r') {  // 忽略回车符
+        bt_cmd[cmd_index++] = ch;
+    }
+}
+
+void handle_tracking_mode(void) {
+    // 自动循迹逻辑（暂留空）
+    /* 待补充代码区域 */
+    
+    // 检查返回指令
+    if(USART2_RecvChar() == 'M') {
+        current_state = STATE_MANUAL;
+        set_left_pwm(0);
+        set_right_pwm(0);
+    }
+}
+
+/**************** 主函数 ****************/
+int main(void) {
+    system_init();  // 统一初始化
+    
+    while(1) {
+        switch(current_state) {
+            case STATE_INIT:
+                current_state = STATE_MANUAL;
+                USART2_SendChar('R'); // 发送准备信号
+                break;
+                
+            case STATE_MANUAL:
+                handle_manual_mode();
+                break;
+                
+            case STATE_TRACKING:
+                handle_tracking_mode();
+                break;
+        }
+        
+        // 系统心跳（20ms周期）
+        mydelay_us(20000);
+    }
+}
